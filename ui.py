@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox
 
 from inventory_manager import InventoryManager
 from storage import JsonStore
+from billing import CartItem, Invoice, now_iso
 
 
 class AppGUI(ctk.CTk):
@@ -22,10 +23,15 @@ class AppGUI(ctk.CTk):
         self.inventory_tab = self.tabview.add("Inventory")
         self.billing_tab = self.tabview.add("Billing")
 
+        self.invoice_store = JsonStore("data/invoices.json")
+        self.cart: list[CartItem] = []
+        self.next_invoice_id = self._get_next_invoice_id()
+
         self._build_inventory_tab()
         self._build_billing_tab()
 
         self.refresh_inventory_table()
+        self.refresh_billing_products()
 
     def _build_inventory_tab(self):
         form = ctk.CTkFrame(self.inventory_tab)
@@ -89,11 +95,52 @@ class AppGUI(ctk.CTk):
         self.tree.bind("<<TreeviewSelect>>", self.on_select_product)
 
     def _build_billing_tab(self):
-        ctk.CTkLabel(
-            self.billing_tab,
-            text="Billing screen comes next.",
-            justify="left"
-        ).pack(padx=20, pady=20, anchor="w")
+        wrap = ctk.CTkFrame(self.billing_tab)
+        wrap.pack(fill="both", expand=True, padx=10, pady=10)
+
+        left = ctk.CTkFrame(wrap)
+        left.pack(side="left", fill="y", padx=10, pady=10)
+
+        ctk.CTkLabel(left, text="Billing / Invoice", font=ctk.CTkFont(size=16, weight="bold")).pack(pady=(10, 5))
+
+        self.bill_product_var = ctk.StringVar(value="Select product")
+        self.bill_qty_var = ctk.StringVar(value="1")
+
+        self.bill_product_menu = ctk.CTkOptionMenu(left, values=self._product_menu_values(), variable=self.bill_product_var)
+        self.bill_product_menu.pack(padx=10, pady=(10, 10))
+
+        ctk.CTkLabel(left, text="Quantity").pack(anchor="w", padx=10)
+        ctk.CTkEntry(left, textvariable=self.bill_qty_var, width=200).pack(padx=10, pady=(0, 10))
+
+        ctk.CTkButton(left, text="Add to Cart", command=self.on_add_to_cart).pack(padx=10, pady=(5, 5))
+        ctk.CTkButton(left, text="Remove Selected Cart Item", command=self.on_remove_cart_item).pack(padx=10, pady=(5, 5))
+        ctk.CTkButton(left, text="Clear Cart", command=self.on_clear_cart).pack(padx=10, pady=(5, 5))
+
+        ctk.CTkButton(left, text="Finalize Invoice (Checkout)", fg_color="#1f6aa5", command=self.on_finalize_invoice).pack(
+            padx=10, pady=(20, 5)
+        )
+
+        self.bill_total_label = ctk.CTkLabel(left, text="Total: 0.00", font=ctk.CTkFont(size=14, weight="bold"))
+        self.bill_total_label.pack(padx=10, pady=(20, 10), anchor="w")
+
+        right = ctk.CTkFrame(wrap)
+        right.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+
+        self.cart_tree = ttk.Treeview(right, columns=("pid", "name", "price", "qty", "line_total"), show="headings")
+        self.cart_tree.heading("pid", text="Product ID")
+        self.cart_tree.heading("name", text="Name")
+        self.cart_tree.heading("price", text="Price")
+        self.cart_tree.heading("qty", text="Qty")
+        self.cart_tree.heading("line_total", text="Line Total")
+
+        self.cart_tree.column("pid", width=90, anchor="center")
+        self.cart_tree.column("name", width=220)
+        self.cart_tree.column("price", width=80, anchor="e")
+        self.cart_tree.column("qty", width=60, anchor="center")
+        self.cart_tree.column("line_total", width=100, anchor="e")
+
+        self.cart_tree.pack(fill="both", expand=True)
+        
 
     def refresh_inventory_table(self, rows=None):
         for item in self.tree.get_children():
@@ -129,6 +176,7 @@ class AppGUI(ctk.CTk):
             name, price, qty = self._read_form()
             self.manager.add_product(name, price, qty)
             self.refresh_inventory_table()
+            self.refresh_billing_products()
             self.clear_form()
         except Exception as e:
             messagebox.showerror("Error", str(e))
@@ -143,6 +191,7 @@ class AppGUI(ctk.CTk):
             if not ok:
                 messagebox.showerror("Error", "Product not found.")
             self.refresh_inventory_table()
+            self.refresh_billing_products()
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
@@ -156,6 +205,7 @@ class AppGUI(ctk.CTk):
         if not ok:
             messagebox.showerror("Error", "Product not found.")
         self.refresh_inventory_table()
+        self.refresh_billing_products()
         self.clear_form()
 
     def on_search(self):
@@ -179,3 +229,138 @@ class AppGUI(ctk.CTk):
     def save_inventory(self):
         self.store.save(self.manager.to_dicts())
         messagebox.showinfo("Saved", "Inventory saved to data/inventory.json")
+
+    #billing part
+
+    def _get_next_invoice_id(self) -> int:
+        rows = self.invoice_store.load()
+        max_id = 0
+        for r in rows:
+            try:
+                max_id = max(max_id, int(r.get("invoice_id", 0)))
+            except Exception:
+                pass
+        return max_id + 1
+    
+    
+    def _product_menu_values(self) -> list[str]:
+        if not self.manager.products:
+            return ["No products"]
+        return [f"{p.id} - {p.name} (stock: {p.qty})" for p in self.manager.products]
+
+    def refresh_billing_products(self):
+        self.bill_product_menu.configure(values=self._product_menu_values())
+        if self.manager.products:
+            self.bill_product_var.set(self._product_menu_values()[0])
+        else:
+            self.bill_product_var.set("No products")
+
+    def refresh_cart_table(self):
+        for item in self.cart_tree.get_children():
+            self.cart_tree.delete(item)
+
+        total = 0.0
+        for ci in self.cart:
+            self.cart_tree.insert(
+                "", "end",
+                values=(ci.product_id, ci.name, f"{ci.price:.2f}", ci.qty, f"{ci.line_total:.2f}")
+            )
+            total += ci.line_total
+
+        self.bill_total_label.configure(text=f"Total: {total:.2f}")
+
+    def on_add_to_cart(self):
+        try:
+            selection = self.bill_product_var.get()
+            if selection in ("Select product", "No products"):
+                messagebox.showwarning("Select", "Please select a product first.")
+                return
+
+            product_id = int(selection.split(" - ")[0])
+
+            try:
+                qty = int(self.bill_qty_var.get())
+            except ValueError:
+                messagebox.showerror("Error", "Quantity must be an integer.")
+                return
+
+            if qty <= 0:
+                messagebox.showerror("Error", "Quantity must be greater than 0.")
+                return
+
+            product = self.manager.get_by_id(product_id)
+            if not product:
+                messagebox.showerror("Error", "Product not found.")
+                return
+
+            if qty > product.qty:
+                messagebox.showerror("Stock Error", f"Not enough stock. Available: {product.qty}")
+                return
+
+            for ci in self.cart:
+                if ci.product_id == product_id:
+                    if ci.qty + qty > product.qty:
+                        messagebox.showerror("Stock Error", f"Not enough stock. Available: {product.qty}")
+                        return
+                    ci.qty += qty
+                    self.refresh_cart_table()
+                    return
+
+            self.cart.append(CartItem(product_id=product.id, name=product.name, price=product.price, qty=qty))
+            self.refresh_cart_table()
+
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def on_remove_cart_item(self):
+        selected = self.cart_tree.selection()
+        if not selected:
+            messagebox.showwarning("Select", "Select a cart item first.")
+            return
+        values = self.cart_tree.item(selected[0], "values")
+        pid = int(values[0])
+
+        self.cart = [ci for ci in self.cart if ci.product_id != pid]
+        self.refresh_cart_table()
+
+    def on_clear_cart(self):
+        self.cart = []
+        self.refresh_cart_table()
+
+    def on_finalize_invoice(self):
+        if not self.cart:
+            messagebox.showwarning("Empty", "Cart is empty.")
+            return
+
+        for ci in self.cart:
+            p = self.manager.get_by_id(ci.product_id)
+            if not p:
+                messagebox.showerror("Error", f"Product missing: {ci.name}")
+                return
+            if ci.qty > p.qty:
+                messagebox.showerror("Stock Error", f"Stock changed. {p.name} available: {p.qty}")
+                return
+
+        for ci in self.cart:
+            p = self.manager.get_by_id(ci.product_id)
+            p.qty -= ci.qty
+
+        invoice = Invoice(
+            invoice_id=self.next_invoice_id,
+            created_at=now_iso(),
+            items=self.cart[:],
+        )
+        self.next_invoice_id += 1
+
+        rows = self.invoice_store.load()
+        rows.append(invoice.to_dict())
+        self.invoice_store.save(rows)
+
+        self.store.save(self.manager.to_dicts())
+
+        self.refresh_inventory_table()
+        self.refresh_billing_products()
+        self.on_clear_cart()
+
+        messagebox.showinfo("Success", f"Invoice #{invoice.invoice_id} saved.\nTotal: {invoice.total():.2f}")
+

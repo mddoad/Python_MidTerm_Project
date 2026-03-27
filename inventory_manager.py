@@ -65,7 +65,7 @@ class InventoryManager:
         if qty < 0:
             raise ValueError("Quantity cannot be negative")
 
-        p = self.get_product(product_id)
+        p = self.get_by_id(product_id)
         if not p:
             return False
         p.name = name

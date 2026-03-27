@@ -1,0 +1,58 @@
+[
+  {
+    "invoice_id": 1,
+    "created_at": "2026-03-28T00:49:37",
+    "total": 24.0,
+    "items": [
+      {
+        "product_id": 1,
+        "name": "Apple",
+        "price": 0.5,
+        "qty": 15,
+        "line_total": 7.5
+      },
+      {
+        "product_id": 2,
+        "name": "Banana",
+        "price": 0.3,
+        "qty": 15,
+        "line_total": 4.5
+      },
+      {
+        "product_id": 3,
+        "name": "Orange",
+        "price": 0.8,
+        "qty": 15,
+        "line_total": 12.0
+      }
+    ]
+  },
+  {
+    "invoice_id": 2,
+    "created_at": "2026-03-28T00:59:21",
+    "total": 570.0,
+    "items": [
+      {
+        "product_id": 2,
+        "name": "apple",
+        "price": 8.0,
+        "qty": 15,
+        "line_total": 120.0
+      },
+      {
+        "product_id": 1,
+        "name": "mango",
+        "price": 10.0,
+        "qty": 20,
+        "line_total": 200.0
+      },
+      {
+        "product_id": 3,
+        "name": "banana",
+        "price": 5.0,
+        "qty": 50,
+        "line_total": 250.0
+      }
+    ]
+  }
+]
